@@ -131,5 +131,54 @@ class rfImputer(object):
 
     return rf.predict(X.iloc[missing_idx]) # Are these oob prediction? Clarify
 
-    
 
+    def impute_df(df, excl_impute = [], excl_predict = [], missing_threshold = 0.6,
+                  factors = [], n_iter = 2):
+        """
+        Imputation of missing data using random forest
+
+        df: data frame to be imputed
+        excl_impute: list of strings, variables that should not be imputed
+        excl_predict: list of strings, variables that should not be used as predictors
+        factors: list of strings, variables that should be explicitly treated as
+                 factors (classification)
+        n_iter: Integer, number of iterations
+        """
+
+        # Exclude all vars that have too many missing values
+        for col in df.columns:
+            proportion_missing = prop_missing(df[col])
+            if proportion_missing > missing_threshold:
+                df.drop(col, axis = 1, inplace = True)
+
+        # Initial guess imputation (mean/mode)
+        df_imputed = mean_mode_impute(df)
+
+        # Do the random forest imputation for each column
+        i = 0
+        while i < n_iter:
+            print "=" * 50
+            print "Iteration %d" %(i + 1)
+            print "=" * 50
+            for col in df.columns:
+
+                if col in excl_impute:
+                    continue
+
+                print "Imputing %s" %col
+                idx = df[df[col].isnull()].index
+                predictors = [c for c in df.columns if c != col and c not in excl_predict]
+                imp_values = rf_impute(col, predictors, df_imputed, idx)
+                df[col].iloc[idx] = imp_values
+                df_imputed[col].iloc[idx]  = imp_values
+            i += 1
+
+        print df.head()
+        print df.shape
+        return(df)
+
+
+#### TODO:
+
+# implement convergence criterion
+# 
