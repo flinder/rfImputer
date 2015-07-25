@@ -83,27 +83,27 @@ class rfImputer(object):
         return dtypes
 
     def find_missing(data):
+        """
+        Returns a dictionary: 'var_name': [missing indices]
+        """
         pass
         
     
-    def mean_mode_impute(df):
+    def mean_mode_impute(var, missing_idx):
 
         """
         Impute mean for continuous and mode for categorical and binary data
-        df: pandas data frame to impute
-        missing_threshold: Maximum allowable proportion missing
         """
-        df_out = df.copy()
-        # Impute mean or mode depending on dtype
-        for col in df_out.columns:
-            idx = df[df[col].isnull()].index
-            if detect_dtype(df[col]) == 'regression':
-                df_out[col].iloc[idx] = df[col].mean()
-            elif detect_dtype(df[col]) == 'classification':
-                df_out[col].iloc[idx] = df[col].mode()[0]
-            else:
-                raise ValueError('Unknown data type')
-        return(df_out)
+        
+        if self.col_types[var] == 'regression':
+            statistic = self.data[var].mean()
+        elif detect_dtype(df[col]) == 'classification':
+            statistic = self.data[var].mode()[0]
+        else:
+            raise ValueError('Unknown data type')
+
+        out = repeat(statistic, repeats = len(missing_idx))
+        return out
 
     def imputed_df():
         pass
@@ -129,56 +129,66 @@ class rfImputer(object):
 
         rf.fit(y = y, X = X)
 
-    return rf.predict(X.iloc[missing_idx]) # Are these oob prediction? Clarify
+        imputations = rf.predict(X.iloc[missing_idx]) # Are these oob prediction? Clarify
+        imputations = np.array(imputations)
+        
+    return imputations 
 
 
-    def impute_df(df, excl_impute = [], excl_predict = [], missing_threshold = 0.6,
-                  factors = [], n_iter = 2):
+    def get_divergence(self, imputed_old, imputed):
+
+        # Calcualte continuous divergence
+        div_cat = 0
+        norm_cat = 0
+        div_cont = 0
+        norm_cont = 0
+        for var in imputed:
+            if self.col_types[var] == 'regression':
+                div = imputed_old - imputed
+                div_cont += diff.dot(diff)
+                norm_cont += imputed.dot(imputed)
+            elif self.col_types[var] == 'classification':
+                div = [1 if old != new else 0 for old, new in zip(imputed_old, imputed)]
+                div_cat += sum(div)
+                norm_cat += len(div)
+            else:
+                raise ValueError("Unrecognized variable type")
+
+        return div_cat/norm_cat, div_cont/norm_cont
+    
+    
+    def impute_df(self):
         """
         Imputation of missing data using random forest
-
-        df: data frame to be imputed
-        excl_impute: list of strings, variables that should not be imputed
-        excl_predict: list of strings, variables that should not be used as predictors
-        factors: list of strings, variables that should be explicitly treated as
-                 factors (classification)
-        n_iter: Integer, number of iterations
         """
 
-        # Exclude all vars that have too many missing values
-        for col in df.columns:
-            proportion_missing = prop_missing(df[col])
-            if proportion_missing > missing_threshold:
-                df.drop(col, axis = 1, inplace = True)
+        for var in varlist:
+            imputations['var'] = mean_mode_impute(df)
 
-        # Initial guess imputation (mean/mode)
-        df_imputed = mean_mode_impute(df)
 
-        # Do the random forest imputation for each column
-        i = 0
-        while i < n_iter:
-            print "=" * 50
-            print "Iteration %d" %(i + 1)
-            print "=" * 50
-            for col in df.columns:
+        div_cat = 0
+        div_cont = 0
+        stop = False
+        
+        while not stop:
 
-                if col in excl_impute:
-                    continue
+            # Store results from previous iteration
+            imputations_old = imputations
+            div_cat_old = div_cat
+            div_cont_old = div_cont
 
-                print "Imputing %s" %col
-                idx = df[df[col].isnull()].index
-                predictors = [c for c in df.columns if c != col and c not in excl_predict]
-                imp_values = rf_impute(col, predictors, df_imputed, idx)
-                df[col].iloc[idx] = imp_values
-                df_imputed[col].iloc[idx]  = imp_values
-            i += 1
+            for var in varlist:
+                imputations['var'] = rf_impute(var, predictors)
 
-        print df.head()
-        print df.shape
-        return(df)
+            div_cat, div_cont = self.get_divergence(imputations_old, imputations)
 
+            
+            if div_cat > div_cat_old and div_cont > div_cont_old:
+                stop = True
+
+        return imputations
 
 #### TODO:
 
 # implement convergence criterion
-# 
+# get imputation quality stats 
