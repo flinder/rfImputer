@@ -6,7 +6,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import Imputer
 import pandas as pd
 import numpy as np
-
+import copy
 
 class rfImputer(object):
 
@@ -19,6 +19,7 @@ class rfImputer(object):
         self.missing = self.find_missing()
         self.prop_missing = self.prop_missing()
         self.imputed_values = {}
+        self.imputation_scores = {}
 
         # Columns in which values should be imputed
         if 'incl_impute' in kwargs:
@@ -60,7 +61,10 @@ class rfImputer(object):
         """
 
         if x.dtype == 'float':
-            out = 'regression'
+            if len(x.unique()) < 4:
+                out = 'classification'
+            else:
+                out = 'regression'
         elif x.dtype == 'object':
             out = 'classification'
         elif x.dtype == 'int64':
@@ -126,6 +130,126 @@ class rfImputer(object):
         out = np.repeat(statistic, repeats = len(self.missing[var]))
         return out
 
+                    
+    def rf_impute(self, impute_var, data_imputed, rf_params):
+        """
+        Impute missing values in a data set using random forest
+        impute: name or column number of variable to be imputed
+        predict: list of names or column numbers of variables used as predictors
+        data: pandas data frame containing impute and predict
+        forest: a sklearn random Forest Classifier or Regressor
+
+        Returns a list of values for the originally missing data
+        """
+
+        y = data_imputed[impute_var]
+        include = [x for x in self.incl_predict if x != impute_var]
+        X = data_imputed[include]
+
+        if self.col_types[impute_var] == 'classification':
+            rf = RandomForestClassifier(oob_score = True, **rf_params)
+            rf.fit(y = y, X = X)
+            oob_predictions = np.argmax(rf.oob_decision_function_, axis = 1)
+            oob_imputation = oob_predictions[self.missing[impute_var]]
+            
+        else:
+            rf = RandomForestRegressor(oob_score = True, **rf_params)
+            rf.fit(y = y, X = X)
+            oob_imputation = rf.oob_prediction_[self.missing[impute_var]]
+    
+        self.imputation_scores[impute_var] = rf.oob_score_
+        self.imputed_values[impute_var] = oob_imputation
+
+
+    def get_divergence(self, imputed_old):
+
+        # Calcualte continuous divergence
+        div_cat = 0
+        norm_cat = 0
+        div_cont = 0
+        norm_cont = 0
+        for var in self.imputed_values:
+            if self.col_types[var] == 'regression':
+                div = imputed_old[var] - self.imputed_values[var]                
+                div_cont += div.dot(div)
+                norm_cont += self.imputed_values[var].dot(self.imputed_values[var])
+            elif self.col_types[var] == 'classification':
+                div = [1 if old != new
+                       else 0
+                       for old, new in zip(imputed_old[var], self.imputed_values[var])]
+                div_cat += sum(div)
+                norm_cat += len(div)
+            else:
+                raise ValueError("Unrecognized variable type")
+
+        
+        if norm_cat == 0:
+            cat_out = 0
+        else:
+            cat_out = div_cat / norm_cat
+        if norm_cont == 0:
+            cont_out = 0
+        else:
+            cont_out = div_cont / norm_cont
+        
+        return cat_out, cont_out
+    
+
+
+    def impute(self, imputation_type, rf_params = None):
+
+        if imputation_type == 'simple':
+            for var in self.incl_impute:
+                self.imputed_values[var] = self.mean_mode_impute(var)
+
+        elif imputation_type == 'random_forest':
+
+            print "-" * 50
+            print "Starting Random Forest Imputation"
+            print "-" * 50
+
+            # Do a simple mean/mode imputation first
+            
+            for var in self.incl_impute:
+                self.imputed_values[var] = self.mean_mode_impute(var)
+            
+            # Rf Imputation Loop
+            div_cat = float('inf')
+            div_cont = float('inf')
+            stop = False
+            i = 0
+            while not stop:
+
+                i += 1
+
+                # Store results from previous iteration
+                imputations_old = copy.copy(self.imputed_values)
+                div_cat_old = div_cat
+                div_cont_old = div_cont
+
+                # Make an imputed df
+                data_imputed = self.imputed_df()
+                
+                for var in self.incl_impute:
+                    self.rf_impute(var, data_imputed, rf_params)
+
+                div_cat, div_cont = self.get_divergence(imputations_old)
+
+                print "Iteration %d:" %i
+                print "Categorical divergence: %f" %div_cat
+                print "Continuous divergence: %f" %div_cont
+
+                # Check if stopping criterion is met
+                if div_cat >= div_cat_old and div_cont >= div_cont_old:
+                    stop = True
+
+
+        else:
+            msg = 'Unrecognized imputation type: %s' %imputation_type
+            raise ValueError(msg)
+
+
+
     def imputed_df(self):
         '''
         Fills the missing values in the input data frame with the values stored
@@ -141,99 +265,6 @@ class rfImputer(object):
                 out_df[var].iloc[idx] = imp
 
         return out_df
-            
-
-    def impute(self, imputation_type):
-
-        if imputation_type == 'simple':
-            for var in self.data.columns:
-                self.imputed_values[var] = self.mean_mode_impute(var)
-
-        else:
-            msg = 'Unrecognized imputation type: %s' %imputation_type
-            raise ValueError(msg)
-        
-            
-
-    def rf_impute(impute, predict, pre_imputations, missing_idx):
-        """
-        Impute missing values in a data set using random forest
-        impute: name or column number of variable to be imputed
-        predict: list of names or column numbers of variables used as predictors
-        data: pandas data frame containing impute and predict
-        forest: a sklearn random Forest Classifier or Regressor
-
-        Returns a list of values for the originally missing data
-        """
-
-        y = data[impute]
-        X = data[predict]
-
-        if detect_dtype(y) == 'classification':
-            rf = RandomForestClassifier()
-        else:
-            rf = RandomForestRegressor()
-
-        rf.fit(y = y, X = X)
-
-        imputations = rf.predict(X.iloc[missing_idx]) # Are these oob prediction? Clarify
-        imputations = np.array(imputations)
-        
-        return imputations 
-
-
-    def get_divergence(self, imputed_old, imputed):
-
-        # Calcualte continuous divergence
-        div_cat = 0
-        norm_cat = 0
-        div_cont = 0
-        norm_cont = 0
-        for var in imputed:
-            if self.col_types[var] == 'regression':
-                div = imputed_old - imputed
-                div_cont += diff.dot(diff)
-                norm_cont += imputed.dot(imputed)
-            elif self.col_types[var] == 'classification':
-                div = [1 if old != new else 0 for old, new in zip(imputed_old, imputed)]
-                div_cat += sum(div)
-                norm_cat += len(div)
-            else:
-                raise ValueError("Unrecognized variable type")
-
-        return div_cat/norm_cat, div_cont/norm_cont
-    
-    
-    def impute_df(self):
-        """
-        Imputation of missing data using random forest
-        """
-
-        for var in varlist:
-            imputations['var'] = mean_mode_impute(df)
-
-
-        div_cat = 0
-        div_cont = 0
-        stop = False
-        
-        while not stop:
-
-            # Store results from previous iteration
-            imputations_old = imputations
-            div_cat_old = div_cat
-            div_cont_old = div_cont
-
-            for var in varlist:
-                imputations['var'] = rf_impute(var, predictors)
-
-            div_cat, div_cont = self.get_divergence(imputations_old, imputations)
-
-            
-            if div_cat > div_cat_old and div_cont > div_cont_old:
-                stop = True
-
-        return imputations
 
 #### TODO:
 
