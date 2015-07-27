@@ -16,8 +16,9 @@ class rfImputer(object):
         '''
         
         self.data = data
-        self.miss_idx = self.find_missing()
-        self.imputed_values = None
+        self.missing = self.find_missing()
+        self.prop_missing = self.prop_missing()
+        self.imputed_values = {}
 
         # Columns in which values should be imputed
         if 'incl_impute' in kwargs:
@@ -38,58 +39,78 @@ class rfImputer(object):
         ## Column types
 
         # Manually specified column types
-        self.is_classification = kwargs['is_classification']
-        self.is_regression = kwargs['is_regression']
+        try:
+            self.is_classification = kwargs['is_classification']
+        except KeyError:
+            self.is_classification = []
+        try:
+            self.is_regression = kwargs['is_regression']
+        except KeyError:
+            self.is_regression = []
 
         # Detect unspecified column types
-        self.col_types = self.assign_dtypes(data.columns, self.is_classificaion,
-                                            self.is_regression, data)
+        self.col_types = self.assign_dtypes()
 
 
-    def detect_dtype(x):
+    def detect_dtype(self, x):
         """
         Detect if variable requires classification or regression.
 
         Needs to be improved
         """
 
-        if isinstance(x, float):
+        if x.dtype == 'float':
             out = 'regression'
-        elif isinstance(x, str):
+        elif x.dtype == 'object':
             out = 'classification'
-        elif isinstance(x, int):
+        elif x.dtype == 'int64':
             if len(x.unique()) < 4:
                 out = 'classification'
             else:
                 out = 'regression'
         else:
-            raise ValueError('Unrecognized data type')
+            msg = 'Unrecognized data type: %s' %x.dtype
+            raise ValueError(msg)
         
         return out
 
-    def assign_dtypes(variables, is_classification, is_regression, data):
+    def assign_dtypes(self):
         """
         Assign prespecified and detect non specified column types
         """
         dtypes = {}
-        for var in variables:
-            if var in is_classification:
+        for var in self.data.columns:
+            if var in self.is_classification:
                 dtypes[var] = 'classification'
-            elif var in is_regression:
+            elif var in self.is_regression:
                 dtypes[var] = 'regression'
             else:
-                dtypes[var] = detect_dtype(data[var])
+                dtypes[var] = self.detect_dtype(self.data[var])
 
         return dtypes
 
-    def find_missing(data):
+    def find_missing(self):
         """
         Returns a dictionary: 'var_name': [missing indices]
         """
-        pass
+        missing = {}
+        var_names = self.data.columns
+        for var in var_names:
+            col = self.data[var]
+            missing[var] = col.index[col.isnull()]
+
+        return missing
+
+    def prop_missing(self):
+        out = {}
+        n = self.data.shape[0]
+        for var in self.data.columns:
+            out[var] = float(len(self.missing[var])) / float(n)
+
+        return out
         
     
-    def mean_mode_impute(var, missing_idx):
+    def mean_mode_impute(self, var):
 
         """
         Impute mean for continuous and mode for categorical and binary data
@@ -97,18 +118,44 @@ class rfImputer(object):
         
         if self.col_types[var] == 'regression':
             statistic = self.data[var].mean()
-        elif detect_dtype(df[col]) == 'classification':
+        elif self.col_types[var] == 'classification':
             statistic = self.data[var].mode()[0]
         else:
             raise ValueError('Unknown data type')
 
-        out = repeat(statistic, repeats = len(missing_idx))
+        out = np.repeat(statistic, repeats = len(self.missing[var]))
         return out
 
-    def imputed_df():
-        pass
+    def imputed_df(self):
+        '''
+        Fills the missing values in the input data frame with the values stored
+        in imputed_values and returns a new data frame (copy)
+        
+        '''
+        if len(self.imputed_values) == 0:
+            raise ValueError('No imputed values available. Call impute() first')
+        
+        out_df = self.data.copy()
+        for var in self.data.columns:
+            for idx, imp in zip(self.missing[var], self.imputed_values[var]):
+                out_df[var].iloc[idx] = imp
 
-    def rf_impute(self, impute, predict, data, missing_idx):
+        return out_df
+            
+
+    def impute(self, imputation_type):
+
+        if imputation_type == 'simple':
+            for var in self.data.columns:
+                self.imputed_values[var] = self.mean_mode_impute(var)
+
+        else:
+            msg = 'Unrecognized imputation type: %s' %imputation_type
+            raise ValueError(msg)
+        
+            
+
+    def rf_impute(impute, predict, pre_imputations, missing_idx):
         """
         Impute missing values in a data set using random forest
         impute: name or column number of variable to be imputed
@@ -132,7 +179,7 @@ class rfImputer(object):
         imputations = rf.predict(X.iloc[missing_idx]) # Are these oob prediction? Clarify
         imputations = np.array(imputations)
         
-    return imputations 
+        return imputations 
 
 
     def get_divergence(self, imputed_old, imputed):
