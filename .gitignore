@@ -1,3 +1,4 @@
 *.csv
 *.pyc
 *.dat
+.ipynb_checkpoints/

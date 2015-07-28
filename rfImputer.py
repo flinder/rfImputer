@@ -98,8 +98,7 @@ class rfImputer(object):
         Returns a dictionary: 'var_name': [missing indices]
         """
         missing = {}
-        var_names = self.data.columns
-        for var in var_names:
+        for var in self.data.columns:
             col = self.data[var]
             missing[var] = col.index[col.isnull()]
 
@@ -209,8 +208,8 @@ class rfImputer(object):
             print "-" * 50
 
             # Do a simple mean/mode imputation first
-            
-            for var in self.incl_impute:
+
+            for var in self.data.columns:
                 self.imputed_values[var] = self.mean_mode_impute(var)
             
             # Rf Imputation Loop
@@ -221,21 +220,21 @@ class rfImputer(object):
             while not stop:
 
                 i += 1
-
+                print "Iteration %d:" %i
+                print "."* 10
                 # Store results from previous iteration
                 imputations_old = copy.copy(self.imputed_values)
                 div_cat_old = div_cat
                 div_cont_old = div_cont
 
-                # Make an imputed df
-                data_imputed = self.imputed_df()
-                
+                # Make predictor matrix, using the imputed values
+                data_imputed = self.imputed_df(output = False)
+
                 for var in self.incl_impute:
                     self.rf_impute(var, data_imputed, rf_params)
 
                 div_cat, div_cont = self.get_divergence(imputations_old)
 
-                print "Iteration %d:" %i
                 print "Categorical divergence: %f" %div_cat
                 print "Continuous divergence: %f" %div_cont
 
@@ -243,14 +242,13 @@ class rfImputer(object):
                 if div_cat >= div_cat_old and div_cont >= div_cont_old:
                     stop = True
 
-
         else:
             msg = 'Unrecognized imputation type: %s' %imputation_type
             raise ValueError(msg)
 
 
 
-    def imputed_df(self):
+    def imputed_df(self, output = True):
         '''
         Fills the missing values in the input data frame with the values stored
         in imputed_values and returns a new data frame (copy)
@@ -260,9 +258,18 @@ class rfImputer(object):
             raise ValueError('No imputed values available. Call impute() first')
         
         out_df = self.data.copy()
-        for var in self.data.columns:
-            for idx, imp in zip(self.missing[var], self.imputed_values[var]):
-                out_df[var].iloc[idx] = imp
+        if not output:
+            iterator = self.data.columns
+        else:
+            iterator = self.incl_impute
+        
+        # for var in iterator:
+        #     for idx, imp in zip(self.missing[var], self.imputed_values[var]):
+        #         out_df[var].iloc[idx] = imp
+        for var in iterator:
+            out_df[var].iloc[self.missing[var]] = self.imputed_values[var]
+
+            
 
         return out_df
 
