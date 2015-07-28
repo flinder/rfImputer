@@ -9,12 +9,72 @@ import numpy as np
 import copy
 
 class rfImputer(object):
+    
+    """Random Forest Imputer Class
+
+    Attributes:
+    -----------
+    
+        data (pandas.DataFrame): The original data.
+    
+        missing (dict): Dictionary of lists of indices of missing values by column.
+    
+        prop_missing (dict): Proportion of missing values per column.
+    
+        imputed_values (dict): Dictionary of lists of imputed values. Only available
+            after `impute()` method has been applied to instance.
+    
+        imputation_scores (dict): Out-of-bag accuracy scores of the random forest
+            model for each variable. Only available after the `impute()` method
+            with `imputation_method = 'random_forest'` has been applied to instance.
+    
+        incl_impute (list): Column names of variables to include in imputation.
+            Can be set by user (see `__init__()`)
+    
+        incl_predict (list): Column names of variables to include as predictors
+            in the random forest models (see `__init__()`).
+    
+        col_types (dict): The data type of each column (regression or classification)
+            which indicates if `RandomForestClassifier` or `RandomForestRegressor` is
+            used for imputation of respective variable.
+
+
+    __init(self, data, **kwargs)__
+
+
+    Args:
+    ----------
+    
+        data (pandas.DataFrame): Original data. See README for format.
+    
+        incl_impute (list)[optional]: Column names of variables to include in
+            imputation. Only if `excl_impute` is not specified. I neither is given
+            all columns in the data frame are imputed.
+    
+        excl_impute (list)[optional]: Column names of variables to exclude from
+            imputation. All other columns are used. Only if `incl_impute` is not
+            specified. I neither is given all columns in the data frame are imputed.
+    
+        incl_predict (list)[optional]: Column names of variables to use as predictors
+            in imputation model. Only if `excl_predict` is not specified. I
+            neither is given all columns in the data frame are imputed.
+    
+        excl_predict (list)[optional]: Column names of variables not to use as
+            predictors in imputation model. Only if `incl_predict` is not specified.
+            If neither is given all columns in the data frame are imputed.
+    
+        is_classification (list)[optional]: Columns that are classification tasks.
+            All columns that are not specified in `is_classification` or
+            `is_regression` are automatically detected. The detection is not well
+            implemented yet.
+    
+        is_regression (list)[optional]: Columns that are regression. Columns that are classification tasks.
+            All columns that are not specified in `is_classification` or
+            `is_regression` are automatically detected. The detection is not well
+            implemented yet.
+    """
 
     def __init__(self, data, **kwargs):
-        '''
-        
-        '''
-        
         self.data = data
         self.missing = self.find_missing()
         self.prop_missing = self.prop_missing()
@@ -34,6 +94,8 @@ class rfImputer(object):
             self.incl_predict = kwargs['incl_predict']
         elif 'excl_predict' in kwargs:
             self.incl_predict = [c for c in data.columns if c not in kwargs['excl_predict']]
+        elif 'incl_predict' in kwargs and elif 'excl_predict' in kwargs:
+            raise ValueError("Specify either excl_predict or incl_predict")
         else:
             self.incl_predict = data.columns
 
@@ -57,6 +119,15 @@ class rfImputer(object):
         """
         Detect if variable requires classification or regression.
 
+        Args:
+        ----------
+        x (pandas.Series): Column of data frame to detect type for
+
+
+        Returns:
+        ----------
+        str: Either 'classification' or 'regression'
+        
         Needs to be improved
         """
 
@@ -95,7 +166,15 @@ class rfImputer(object):
 
     def find_missing(self):
         """
-        Returns a dictionary: 'var_name': [missing indices]
+        Find the indices of missing data in the original data frame
+
+        Args:
+        ---------
+
+        Returns:
+        ----------
+        dict: 'var_name': [missing indices]
+        
         """
         missing = {}
         for var in self.data.columns:
@@ -105,11 +184,22 @@ class rfImputer(object):
         return missing
 
     def prop_missing(self):
+        """
+        Calculate the proportion of missing values for each column in the original
+        data
+
+        Args:
+        ---------
+
+        Returns:
+        ---------
+        
+        dict: 'var_name': float
+        """
         out = {}
         n = self.data.shape[0]
         for var in self.data.columns:
             out[var] = float(len(self.missing[var])) / float(n)
-
         return out
         
     
@@ -117,6 +207,14 @@ class rfImputer(object):
 
         """
         Impute mean for continuous and mode for categorical and binary data
+
+        Args:
+        ---------
+        var (str): Column name of variable in original data
+
+        Returns:
+        ---------
+        np.array: Repeating mean or mode of `var`
         """
         
         if self.col_types[var] == 'regression':
@@ -132,13 +230,26 @@ class rfImputer(object):
                     
     def rf_impute(self, impute_var, data_imputed, rf_params):
         """
-        Impute missing values in a data set using random forest
-        impute: name or column number of variable to be imputed
-        predict: list of names or column numbers of variables used as predictors
-        data: pandas data frame containing impute and predict
-        forest: a sklearn random Forest Classifier or Regressor
+        Fit random forest and get predictions for missing values
 
-        Returns a list of values for the originally missing data
+        Args:
+        ----------
+
+        impute_var (str): Column name of variable to be imputed
+
+        data_imputed (pandas.DataFrame): A complete imputed DataFrame from the
+            previous iteration
+
+        rf_params (dict): Parameters for `RandomForestClassifier/Regressor`. Keys
+            must be named arguments from the respective `sklearn` method
+
+
+        Returns:
+        ----------
+        Sets `scores` and `imputed_values`
+        float: Accuracy score from `RandomForestClassifier/Regressor`
+        np.array: Imputations from out of bag predictions 
+        
         """
 
         y = data_imputed[impute_var]
@@ -161,6 +272,18 @@ class rfImputer(object):
 
 
     def get_divergence(self, imputed_old):
+        """
+        Calculate divergence to imputations from previous iteration
+
+        Args:
+        ---------
+        imputed_old (dict): Imputated values from previous iteration.
+
+        Returns:
+        ---------
+        float: divergence of categorical variables
+        float: divergence of continuous variable
+        """
 
         # Calcualte continuous divergence
         div_cat = 0
@@ -194,8 +317,26 @@ class rfImputer(object):
         return cat_out, cont_out
     
 
-
     def impute(self, imputation_type, rf_params = None):
+        """
+        Impute data for `rfImputer` object
+
+        Imputed either mean/mode or predictions from random fores model. Iteratively
+        fits random forest models until predictions for missing data converge.
+
+        Args:
+        ----------
+        imputation_type (str): `simple` for mean/mode imputation or 'random_forest'
+            for random forest imputation.
+
+        rf_params (dict): Parameters for sklearn methods. Must stick to naming
+            conventions.
+
+        Returns:
+        ----------
+        Sets `imputed_values`
+
+        """
 
         if imputation_type == 'simple':
             for var in self.incl_impute:
@@ -251,7 +392,16 @@ class rfImputer(object):
     def imputed_df(self, output = True):
         '''
         Fills the missing values in the input data frame with the values stored
-        in imputed_values and returns a new data frame (copy)
+        in imputed_values and returns a new data frame (copy).
+
+        Args:
+        ---------
+        output (bool): If `False` internal method fills all missing values. If
+            `True` only the missing values for columns in `incl_impute` are filled.
+        
+        Returns:
+        ----------
+        pandas.DataFrame: Filled dataframe
         
         '''
         if len(self.imputed_values) == 0:
@@ -269,11 +419,4 @@ class rfImputer(object):
         for var in iterator:
             out_df[var].iloc[self.missing[var]] = self.imputed_values[var]
 
-            
-
         return out_df
-
-#### TODO:
-
-# implement convergence criterion
-# get imputation quality stats 
